@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PredictSphere - Social Prediction Markets</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .glass {
+            background: rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+        }
+        
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 3px solid #7c3aed;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            display: none;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .gradient-bg {
+            background: linear-gradient(135deg, #7c3aed 0%, #2563eb 100%);
+        }
+
+        .prediction-card:hover {
+            transform: translateY(-2px);
+            transition: all 0.2s ease;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white font-[Inter]">
+    <!-- Navbar -->
+    <nav class="glass fixed w-full z-50 px-4 py-3">
+        <div class="container mx-auto flex justify-between items-center">
+            <div class="text-2xl font-bold gradient-text">PredictSphere</div>
+            <button id="connectWallet" class="glass px-4 py-2 rounded-full hover:bg-purple-600 transition">
+                <span id="walletText">Connect Wallet</span>
+                <div class="loader ml-2 inline-block"></div>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container mx-auto pt-20 px-4">
+        <!-- Tabs -->
+        <div class="flex overflow-x-auto space-x-4 mb-6 pb-2">
+            <button class="glass px-6 py-2 rounded-full active" data-tab="trending">Trending</button>
+            <button class="glass px-6 py-2 rounded-full" data-tab="friends">Friends' Bets</button>
+            <button class="glass px-6 py-2 rounded-full" data-tab="my-bets">My Bets</button>
+            <button class="glass px-6 py-2 rounded-full" data-tab="live">Live</button>
+            <button class="glass px-6 py-2 rounded-full" data-tab="resolve">Resolve</button>
+        </div>
+
+        <!-- Create Prediction Button -->
+        <button id="createPredictionBtn" class="fixed bottom-20 right-6 gradient-bg p-4 rounded-full shadow-lg z-40">
+            <i class="bi bi-plus-lg text-2xl"></i>
+        </button>
+
+        <!-- Predictions Container -->
+        <div id="predictionsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <!-- Predictions will be dynamically added here -->
+        </div>
+    </div>
+
+    <!-- Create Prediction Modal -->
+    <div id="createModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50">
+        <div class="glass max-w-lg mx-auto mt-20 p-6">
+            <h2 class="text-2xl font-bold mb-4">Create Prediction</h2>
+            <input type="text" id="predictionQuestion" placeholder="Enter your prediction question..." 
+                   class="w-full p-2 mb-4 rounded bg-gray-800 border border-gray-700">
+            <div class="flex justify-end space-x-4">
+                <button id="cancelCreate" class="glass px-4 py-2 rounded">Cancel</button>
+                <button id="submitPrediction" class="gradient-bg px-4 py-2 rounded">
+                    Create
+                    <div class="loader ml-2 inline-block"></div>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Place Bet Modal -->
+    <div id="betModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50">
+        <div class="glass max-w-lg mx-auto mt-20 p-6">
+            <h2 class="text-2xl font-bold mb-4">Place Your Bet</h2>
+            <p id="betQuestion" class="mb-4"></p>
+            <input type="number" id="betAmount" placeholder="Amount in ETH" 
+                   class="w-full p-2 mb-4 rounded bg-gray-800 border border-gray-700">
+            <div class="flex justify-end space-x-4">
+                <button id="cancelBet" class="glass px-4 py-2 rounded">Cancel</button>
+                <button id="confirmYes" class="gradient-bg px-4 py-2 rounded">Bet YES</button>
+                <button id="confirmNo" class="gradient-bg px-4 py-2 rounded">Bet NO</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Contract configuration
+        const CONTRACT_ADDRESS = '0x85A5C238c2791BCF7afC150Cf72362cEdC214105';
+        const CHAIN_ID = '0x1'; // Ethereum Mainnet
+        let contract;
+        let signer;
+        let provider;
+
+        // UI Elements
+        const connectWalletBtn = document.getElementById('connectWallet');
+        const createPredictionBtn = document.getElementById('createPredictionBtn');
+        const createModal = document.getElementById('createModal');
+        const betModal = document.getElementById('betModal');
+        const predictionsContainer = document.getElementById('predictionsContainer');
+        
+        // Initialize Web3
+        async function initWeb3() {
+            try {
+                if (typeof window.ethereum !== 'undefined') {
+                    provider = new ethers.providers.Web3Provider(window.ethereum);
+                    
+                    // Request account access
+                    await window.ethereum.request({ method: 'eth_requestAccounts' });
+                    signer = provider.getSigner();
+                    
+                    // Get connected network
+                    const network = await provider.getNetwork();
+                    if (network.chainId.toString(16) !== CHAIN_ID.slice(2)) {
+                        await switchNetwork();
+                    }
+                    
+                    contract = new ethers.Contract(CONTRACT_ADDRESS, contractABI, signer);
+                    
+                    const address = await signer.getAddress();
+                    connectWalletBtn.innerHTML = `${address.slice(0,6)}...${address.slice(-4)}`;
+                    
+                    // Load predictions
+                    await loadPredictions();
+                }
+            } catch (error) {
+                console.error('Error initializing Web3:', error);
+                alert('Failed to connect wallet. Please try again.');
+            }
+        }
+
+        // Switch Network
+        async function switchNetwork() {
+            try {
+                await window.ethereum.request({
+                    method: 'wallet_switchEthereumChain',
+                    params: [{ chainId: CHAIN_ID }],
+                });
+            } catch (error) {
+                console.error('Error switching network:', error);
+                alert('Please switch to Ethereum Mainnet');
+            }
+        }
+
+        // Load Predictions
+        async function loadPredictions() {
+            try {
+                const count = await contract.getPredictionCount();
+                predictionsContainer.innerHTML = '';
+                
+                for (let i = 0; i < count; i++) {
+                    const prediction = await contract.getPrediction(i);
+                    const card = createPredictionCard(prediction, i);
+                    predictionsContainer.appendChild(card);
+                }
+            } catch (error) {
+                console.error('Error loading predictions:', error);
+                alert('Failed to load predictions');
+            }
+        }
+
+        // Create Prediction Card
+        function createPredictionCard(prediction, id) {
+            const div = document.createElement('div');
+            div.className = 'glass p-4 prediction-card';
+            div.innerHTML = `
+                <h3 class="text-xl font-bold mb-2">${prediction.question}</h3>
+                <div class="flex justify-between mb-4">
+                    <span>Yes: ${ethers.utils.formatEther(prediction.totalYes)} ETH</span>
+                    <span>No: ${ethers.utils.formatEther(prediction.totalNo)} ETH</span>
+                </div>
+                <div class="flex space-x-2">
+                    <button class="gradient-bg px-4 py-2 rounded flex-1" onclick="openBetModal(${id}, '${prediction.question}', true)">
+                        Bet YES
+                    </button>
+                    <button class="gradient-bg px-4 py-2 rounded flex-1" onclick="openBetModal(${id}, '${prediction.question}', false)">
+                        Bet NO
+                    </button>
+                </div>
+            `;
+            return div;
+        }
+
+        // Event Listeners
+        connectWalletBtn.addEventListener('click', initWeb3);
+        
+        createPredictionBtn.addEventListener('click', () => {
+            if (!signer) {
+                alert('Please connect your wallet first');
+                return;
+            }
+            createModal.classList.remove('hidden');
+        });
+
+        document.getElementById('cancelCreate').addEventListener('click', () => {
+            createModal.classList.add('hidden');
+        });
+
+        document.getElementById('submitPrediction').addEventListener('click', async () => {
+            const question = document.getElementById('predictionQuestion').value;
+            if (!question) return;
+            
+            try {
+                const tx = await contract.createPrediction(question);
+                await tx.wait();
+                createModal.classList.add('hidden');
+                await loadPredictions();
+            } catch (error) {
+                console.error('Error creating prediction:', error);
+                alert('Failed to create prediction');
+            }
+        });
+
+        // Initialize
+        if (typeof window.ethereum !== 'undefined') {
+            window.ethereum.on('accountsChanged', initWeb3);
+            window.ethereum.on('chainChanged', () => window.location.reload());
+        }
+    </script>
+<script>document.body.addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); return }, { passive: false })</script>
+	</body>
+</html>
